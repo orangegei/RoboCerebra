@@ -73,3 +73,8 @@ temp/
 *.tmp
 *.bak
 *.backup
+
+RoboCerebra_Bench/
+evaluation/rollouts/
+models/
+openvla-oft/
