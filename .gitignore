@@ -75,6 +75,7 @@ temp/
 *.backup
 
 RoboCerebra_Bench/
+RoboCerebra/
 evaluation/rollouts/
 models/
 openvla-oft/
