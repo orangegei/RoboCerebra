@@ -1,3 +1,10 @@
+# python grad/check_libero_set_state.py /home/shenhaotian/grad/RoboCerebra/RoboCerebra_Bench/Ideal/case1/demo.hdf5
+
+# demo_states shape: (T, 71)
+# sim.data.qpos: shape=(37,) dtype=float64
+# sim.data.qvel: shape=(33,) dtype=float64
+
+
 import sys
 import numpy as np
 import h5py
@@ -6,7 +13,11 @@ PEOJECT_ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(PEOJECT_ROOT))
 
-from evaluation.task_runner import setup_task_environment
+from robosuite import load_controller_config
+import libero.libero.envs.bddl_utils as BDDLUtils
+from libero.libero.envs import * 
+from grad.utils import get_libero_image, save_image
+
 
 def load_demo_state(hdf5_path):
     with h5py.File(hdf5_path, "r") as f:
@@ -140,14 +151,28 @@ def render_one_frame(env, out_path="debug_render.png"):
     print(f"[OK] Saved render to {out_path}")
     return True
 
-def make_env():
+def make_env(bddl_file_path):
     """
-    这里需要你按 LIBERO 的方式创建环境。
-    你现在的 case/bddl/task 都在同一个 case 目录里——通常 LIBERO 有“通过 task_suite / task_name 创建”的入口。
-    你把你项目里现有的 env 创建代码粘到这里即可。
+    根据 bddl_file_path 初始化对应的 LIBERO 环境，返回 env 对象。
+    这里直接参考 evaluation/task_runner.py 中的环境初始化代码，确保参数一致。
     """
-    task_dir = "/home/shenhaotian/grad/RoboCerebra/RoboCerebra_Bench/Ideal"
-    env, bddl_file_path, error = setup_task_environment(task_dir, log_file=None)
+    problem_info = BDDLUtils.get_problem_info(bddl_file_path)
+    problem_name = problem_info["problem_name"]
+    controller_config = load_controller_config(default_controller="OSC_POSE")
+    env = TASK_MAPPING[problem_name](
+        bddl_file_name=bddl_file_path,
+        robots=["Panda"],
+        controller_configs=controller_config,
+        has_renderer=False,
+        has_offscreen_renderer=True,
+        camera_names=["agentview", "robot0_eye_in_hand"],
+        ignore_done=True,
+        use_camera_obs=True,
+        reward_shaping=True,
+        camera_heights=256,
+        camera_widths=256,
+        control_freq=20,
+    )
     return env
     
 
@@ -156,7 +181,7 @@ def main():
     demo_states = load_demo_state(hdf5_path)
     print("demo_states shape:", demo_states.shape)  # (T,71)
 
-    env = make_env()
+    env = make_env(bddl_file_path="/home/shenhaotian/grad/RoboCerebra/RoboCerebra_Bench/Ideal/case1/COFFEE_TABLESCENE_organize_selected_food_items_into_the_white_storage_box.bddl")
     obs = env.reset()
 
     print("\n=== After reset: probing getters ===")
@@ -168,16 +193,21 @@ def main():
             print(f"{k}: {v}")
 
     print("\n=== Try set demo_states[0] back ===")
-    method = try_setters(env, demo_states[0])
+    method = try_setters(env, demo_states[50])
     if method is None:
         print("[FAIL] No setter method accepted the 71-dim state.")
         print("Next step: compare 71 with (nq+nv) and/or search your env wrapper for state serialization.")
         return
 
     print("[OK] set succeeded via:", method)
+    obs = env._get_observations()
+    img = get_libero_image(obs)
+    save_image(img, "grad/set_state_render.png")
+    print("Saved set_state_render.png")
 
     # 尝试渲染一帧（验收点）
-    render_one_frame(env, "state0_render.png")
+    # render_one_frame(env, "state0_render.png")
+    env.close()
 
 if __name__ == "__main__":
     main()
