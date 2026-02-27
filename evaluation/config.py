@@ -45,7 +45,7 @@ class GenerateConfig:
     # Model‑specific parameters
     # ------------------------------------------------------------------
     model_family: str = "openvla"
-    pretrained_checkpoint: Union[str, Path] | None = "/home/shenhaotian/grad/RoboCerebra/openvla-7b-oft-finetuned-libero-spatial-object-goal-10"
+    pretrained_checkpoint: Union[str, Path] | None = "/home/shenhaotian/grad/RoboCerebra/models/openvla-7b-oft-finetuned-libero-spatial-object-goal-10"
     
     use_l1_regression: bool = True
     use_diffusion: bool = False
