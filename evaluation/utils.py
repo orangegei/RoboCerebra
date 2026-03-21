@@ -21,16 +21,54 @@ import libero.libero.envs.bddl_utils as BDDLUtils
 from libero.libero.envs import *  # noqa: F403
 
 from config import GenerateConfig, SCENE_MAPPINGS, MOVABLE_OBJECT_LIST
-from experiments.robot.libero.libero_utils import (
-    get_libero_image,
-    get_libero_wrist_image,
-    quat2axisangle,
-)
-from experiments.robot.openvla_utils import resize_image_for_policy
-from experiments.robot.robot_utils import (
-    invert_gripper_action,
-    normalize_gripper_action,
-)
+
+try:
+    from experiments.robot.libero.libero_utils import (
+        get_libero_image,
+        get_libero_wrist_image,
+        quat2axisangle,
+    )
+    from experiments.robot.openvla_utils import resize_image_for_policy
+    from experiments.robot.robot_utils import (
+        invert_gripper_action,
+        normalize_gripper_action,
+    )
+except ImportError:
+    from PIL import Image
+
+    def get_libero_image(obs):
+        return obs["agentview_image"][::-1]
+
+    def get_libero_wrist_image(obs):
+        return obs["robot0_eye_in_hand_image"][::-1]
+
+    def quat2axisangle(quat):
+        # quat: (x, y, z, w)
+        q = np.array(quat)
+        sin_half = np.linalg.norm(q[:3])
+        if sin_half < 1e-6:
+            return np.zeros(3)
+        angle = 2.0 * np.arctan2(sin_half, q[3])
+        axis = q[:3] / sin_half
+        return axis * angle
+
+    def resize_image_for_policy(img, resize_size):
+        if img.shape[0] == resize_size and img.shape[1] == resize_size:
+            return img
+        pil = Image.fromarray(img)
+        pil = pil.resize((resize_size, resize_size), Image.LANCZOS)
+        return np.array(pil)
+
+    def normalize_gripper_action(action, binarize=True):
+        action = action.copy()
+        if binarize:
+            action[-1] = 1.0 if action[-1] >= 0 else -1.0
+        return action
+
+    def invert_gripper_action(action):
+        action = action.copy()
+        action[-1] = -action[-1]
+        return action
 
 
 logger = logging.getLogger(__name__)
