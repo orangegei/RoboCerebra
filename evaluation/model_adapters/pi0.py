@@ -18,10 +18,14 @@ class Pi0Adapter:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         policy = PI0Policy.from_pretrained(model_id).to(device).eval()
+        local_paligemma = "/seu_nvme/home/linli/213221090/MyModels/google/paligemma-3b-pt-224"
         preprocess, postprocess = make_pre_post_processors(
             policy.config,
             model_id,
-            preprocessor_overrides={"device_processor": {"device": str(device)}},
+            preprocessor_overrides={
+                "device_processor": {"device": str(device)},
+                "tokenizer_processor": {"tokenizer_name": local_paligemma},
+            },
         )
 
         return PolicyRuntime(
