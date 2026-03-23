@@ -17,8 +17,11 @@ import imageio
 import wandb
 
 from config import GenerateConfig
-from experiments.robot.robot_utils import DATE_TIME
-
+try:
+    from experiments.robot.robot_utils import DATE_TIME
+except ImportError:
+    import time
+    DATE_TIME = time.strftime("%Y_%m_%d-%H_%M_%S")
 
 logger = logging.getLogger(__name__)
 BASE_DIR = Path.cwd() / "rollouts" / DATE_TIME
