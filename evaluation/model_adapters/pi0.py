@@ -1,7 +1,6 @@
 from typing import Sequence
 
 import numpy as np
-import torch
 
 from config import GenerateConfig
 from model_adapters.base import PolicyRuntime
@@ -9,30 +8,44 @@ from model_adapters.base import PolicyRuntime
 
 class Pi0Adapter:
     name = "pi0"
+    _DEFAULT_OPENPI_CONFIG = "pi0_libero"
+    _DEFAULT_RESIZE_SIZE = 224
+
+    def _get_openpi_config_name(self, cfg: GenerateConfig) -> str:
+        return getattr(cfg, "openpi_config_name", self._DEFAULT_OPENPI_CONFIG)
+
+    def _normalize_image(self, image: np.ndarray) -> np.ndarray:
+        image = np.asarray(image)
+        if image.ndim != 3:
+            raise ValueError(f"Expected image with 3 dims, got shape={image.shape}")
+
+        if image.shape[0] == 3 and image.shape[-1] != 3:
+            image = np.transpose(image, (1, 2, 0))
+
+        if np.issubdtype(image.dtype, np.floating):
+            if image.max() <= 1.0:
+                image = image * 255.0
+            image = np.clip(image, 0, 255).astype(np.uint8)
+        elif image.dtype != np.uint8:
+            image = image.astype(np.uint8)
+
+        return image
 
     def initialize(self, cfg: GenerateConfig) -> PolicyRuntime:
-        from lerobot.policies.pi0 import PI0Policy
-        from lerobot.policies.factory import make_pre_post_processors
+        from openpi.policies import policy_config
+        from openpi.training import config as openpi_config
 
-        model_id = str(cfg.pretrained_checkpoint)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if cfg.pretrained_checkpoint is None:
+            raise ValueError("pretrained_checkpoint must not be None for pi0 evaluation.")
 
-        policy = PI0Policy.from_pretrained(model_id).to(device).eval()
-        local_paligemma = "/seu_nvme/home/linli/213221090/MyModels/google/paligemma-3b-pt-224"
-        preprocess, postprocess = make_pre_post_processors(
-            policy.config,
-            model_id,
-            preprocessor_overrides={
-                "device_processor": {"device": str(device)},
-                "tokenizer_processor": {"tokenizer_name": local_paligemma},
-            },
-        )
+        config_name = self._get_openpi_config_name(cfg)
+        train_config = openpi_config.get_config(config_name)
+        policy = policy_config.create_trained_policy(train_config, str(cfg.pretrained_checkpoint))
 
         return PolicyRuntime(
             model=policy,
-            resize_size=policy.config.image_resolution[0],
-            processor=preprocess,
-            action_head=postprocess,
+            resize_size=self._DEFAULT_RESIZE_SIZE,
+            processor={"openpi_config_name": config_name},
         )
 
     def predict_actions(
@@ -43,33 +56,25 @@ class Pi0Adapter:
         task_description: str,
     ) -> Sequence[np.ndarray]:
         policy = runtime.model
-        preprocess = runtime.processor
 
-        # Build observation dict matching lerobot dataset format
-        frame = {
-            "observation.images.image": torch.from_numpy(observation["full_image"]).permute(2, 0, 1).float() / 255.0,
-            "observation.images.image2": torch.from_numpy(observation["wrist_image"]).permute(2, 0, 1).float() / 255.0,
-            "observation.state": torch.from_numpy(observation["state"]).float(),
-            "task": task_description,
+        example = {
+            "observation/image": self._normalize_image(observation["full_image"]),
+            "observation/wrist_image": self._normalize_image(observation["wrist_image"]),
+            "observation/state": np.asarray(observation["state"], dtype=np.float32),
+            "prompt": task_description,
         }
 
-        batch = preprocess(frame)
+        outputs = policy.infer(example)
+        actions = np.asarray(outputs["actions"], dtype=np.float32)
+        if actions.ndim == 1:
+            actions = actions[None, :]
 
-        with torch.inference_mode():
-            # predict_action_chunk returns (1, chunk_size, action_dim)
-            actions = policy.predict_action_chunk(batch)
-
-        postprocess = runtime.action_head
-        actions = postprocess(actions)
-
-        # Slice to num_open_loop_steps and convert to list of numpy arrays
-        n = cfg.num_open_loop_steps
-        actions_np = actions[0, :n].cpu().numpy()
-        return [actions_np[i] for i in range(actions_np.shape[0])]
+        n = min(cfg.num_open_loop_steps, actions.shape[0])
+        return [actions[i].copy() for i in range(n)]
 
     def postprocess_action(self, cfg: GenerateConfig, action: np.ndarray) -> np.ndarray:
-        # Pi0 postprocessor already denormalizes actions.
-        # Binarize gripper: last dim is gripper, threshold at 0.5
-        action = action.copy()
-        action[-1] = 1.0 if action[-1] > 0.5 else -1.0
+        del cfg
+        # openpi policy outputs are already unnormalized; keep only gripper binarization here.
+        action = np.asarray(action, dtype=np.float32).copy()
+        action[-1] = 1.0 if action[-1] >= 0.0 else -1.0
         return action

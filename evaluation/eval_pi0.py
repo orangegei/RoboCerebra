@@ -18,6 +18,7 @@ from eval_policy import run_evaluation
 class Pi0GenerateConfig(GenerateConfig):
     model_family: str = "pi0"
     pretrained_checkpoint: Union[str, Path] | None = None
+    openpi_config_name: str = "pi0_libero"
 
 
 @draccus.wrap()

@@ -19,8 +19,11 @@ from config import GenerateConfig, MOVABLE_OBJECT_LIST
 from robocerebra_logging import log_message, save_rollout_video
 from resume import simulate_resume_completion
 from utils import prepare_observation, process_action, _find_obj_y_addr, _load_step_objects
-from experiments.robot.libero.libero_utils import get_libero_dummy_action
-from experiments.robot.robot_utils import get_action
+try:
+    from experiments.robot.libero.libero_utils import get_libero_dummy_action
+    from experiments.robot.robot_utils import get_action
+except:
+    pass
 
 
 logger = logging.getLogger(__name__)
