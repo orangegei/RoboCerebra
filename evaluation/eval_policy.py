@@ -297,6 +297,7 @@ def run_task(
     if not is_valid:
         return 0, 0, 0, 0, base_result
 
+    # Initialize task planning tree from BDDL file (if available)
     try:
         text_info = parse_bddl_text(bddl_file_path)
         metadata = parse_bddl_metadata(bddl_file_path)
