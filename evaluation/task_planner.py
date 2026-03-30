@@ -20,7 +20,6 @@ class TaskPlanSchema:
     task: str = ""
     language_instruction: str = ""
     formal_goal: str = ""
-    status: str = "running"
     root: TaskPlanRootNode = field(default_factory=TaskPlanRootNode)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -131,3 +130,22 @@ def parse_bddl_metadata(bddl_path: str | Path) -> Dict[str, Any]:
         "goal_state": parsed["goal_state"],
         "language_instruction": text_info["language_instruction"],
     }
+
+
+def normalize_goal_predicate(predicate: List[str]) -> str:
+    if not isinstance(predicate, list):
+        raise ValueError(f"Goal predicate must be a list, got {type(predicate)!r}")
+    if len(predicate) != 3:
+        raise ValueError(f"Goal predicate must contain exactly 3 items, got {len(predicate)}: {predicate!r}")
+
+    relation, subject, target = predicate
+    if not all(isinstance(item, str) and item.strip() for item in (relation, subject, target)):
+        raise ValueError(f"Goal predicate items must be non-empty strings: {predicate!r}")
+
+    return f"{subject} {relation.lower()} {target}"
+
+
+def normalize_goal_state(goal_state: List[List[str]]) -> List[str]:
+    if not isinstance(goal_state, list):
+        raise ValueError(f"goal_state must be a list, got {type(goal_state)!r}")
+    return [normalize_goal_predicate(predicate) for predicate in goal_state]
