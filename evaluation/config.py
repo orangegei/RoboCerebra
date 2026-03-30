@@ -63,6 +63,12 @@ class GenerateConfig:
     vlm_prompt: str = ""
     vlm_max_new_tokens: int = 64
     vlm_use_wrist_image: bool = False
+    use_vlm_planner: bool = False
+    vlm_subtask_prompt: str = ""
+    vlm_action_prompt: str = ""
+    vlm_planner_max_new_tokens: int = 256 * 8
+    vlm_planner_use_wrist_image: bool = False
+    vlm_planner_force_single_step: bool = True
 
     # ------------------------------------------------------------------
     # RoboCerebra environment‑specific parameters
