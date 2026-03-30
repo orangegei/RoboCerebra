@@ -1,3 +1,4 @@
+import json
 import re
 import sys
 from dataclasses import asdict, dataclass, field
@@ -172,3 +173,13 @@ def build_task_plan_from_bddl(
         description=text_info["language_instruction"],
         goal_summary=goal_summary,
     )
+
+
+def write_task_plan_json(
+    plan: Dict[str, Any],
+    output_dir: str | Path,
+    filename: str = "vlm_planning_tree.json",
+) -> Path:
+    output_path = Path(output_dir) / filename
+    output_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+    return output_path
