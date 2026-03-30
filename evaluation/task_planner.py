@@ -17,7 +17,7 @@ class TaskPlanRootNode:
 
 @dataclass
 class TaskPlanSchema:
-    task: str = ""
+    task_id: str = ""
     language_instruction: str = ""
     formal_goal: str = ""
     root: TaskPlanRootNode = field(default_factory=TaskPlanRootNode)
@@ -27,18 +27,16 @@ class TaskPlanSchema:
 
 
 def build_task_plan_root(
-    task: str = "",
+    task_id: str = "",
     language_instruction: str = "",
     formal_goal: str = "",
     description: str = "",
     goal_summary: List[str] | None = None,
-    status: str = "running",
 ) -> Dict[str, Any]:
     plan = TaskPlanSchema(
-        task=task,
+        task_id=task_id,
         language_instruction=language_instruction,
         formal_goal=formal_goal,
-        status=status,
         root=TaskPlanRootNode(
             description=description,
             goal_summary=list(goal_summary or []),
@@ -149,3 +147,28 @@ def normalize_goal_state(goal_state: List[List[str]]) -> List[str]:
     if not isinstance(goal_state, list):
         raise ValueError(f"goal_state must be a list, got {type(goal_state)!r}")
     return [normalize_goal_predicate(predicate) for predicate in goal_state]
+
+
+def build_task_plan_from_bddl(
+    text_info: Dict[str, str],
+    metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    if text_info["task_id"] != metadata["task_id"]:
+        raise ValueError(
+            f"Mismatched task ids between text info and metadata: "
+            f"{text_info['task_id']!r} != {metadata['task_id']!r}"
+        )
+    if text_info["language_instruction"] != metadata["language_instruction"]:
+        raise ValueError(
+            "Mismatched language instructions between text info and metadata: "
+            f"{text_info['language_instruction']!r} != {metadata['language_instruction']!r}"
+        )
+
+    goal_summary = normalize_goal_state(metadata["goal_state"])
+    return build_task_plan_root(
+        task_id=text_info["task_id"],
+        language_instruction=text_info["language_instruction"],
+        formal_goal=text_info["formal_goal"],
+        description=text_info["language_instruction"],
+        goal_summary=goal_summary,
+    )
