@@ -67,6 +67,61 @@ def _normalize_text(value: str) -> str:
     return " ".join(value.split()).strip()
 
 
+def _require_non_empty_text(value: Any, field_name: str) -> str:
+    """校验必填文本字段，并返回归一化后的字符串。
+
+    这个函数主要用于 prompt builder 的输入校验，确保像
+    `language_instruction`、`formal_goal`、`selected_subtask_description`
+    这些字段在构建 prompt 前就是合法的。
+
+    输入示例：
+        value = "  grasp cream_cheese_1 "
+        field_name = "selected_subtask_description"
+
+    输出示例：
+        "grasp cream_cheese_1"
+    """
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string, got {type(value)!r}")
+
+    normalized = _normalize_text(value)
+    if not normalized:
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return normalized
+
+
+def _normalize_task_tree(task_tree: Any) -> Dict[str, Any]:
+    """校验任务树对象，并转成稳定的 JSON 字符串输入。
+
+    这里要求 `task_tree` 必须是 dict，因为后续会直接把它序列化进 prompt，
+    作为 VLM 的历史上下文。
+
+    输入示例：
+        task_tree = {"root": {"children": []}}
+
+    输出示例：
+        {"root": {"children": []}}
+    """
+    if not isinstance(task_tree, dict):
+        raise TypeError(f"task_tree must be a dict, got {type(task_tree)!r}")
+    return task_tree
+
+
+def _serialize_task_tree_for_prompt(task_tree: Dict[str, Any]) -> str:
+    """将任务树序列化成适合拼接到 prompt 中的 JSON 字符串。
+
+    使用 `ensure_ascii=False` 保留原始文本，可读性更好；
+    使用 `indent=2` 让模型更容易看清层级结构。
+
+    输入示例：
+        {"root": {"children": []}}
+
+    输出示例：
+        '{\\n  "root": {\\n    "children": []\\n  }\\n}'
+    """
+    return json.dumps(task_tree, ensure_ascii=False, indent=2)
+
+
 def _normalize_candidate_list(raw_value: Any, field_name: str) -> List[str]:
     """校验并归一化候选列表字段。
 
@@ -282,6 +337,142 @@ def _extract_json_payload(raw_text: str) -> Dict[str, Any]:
     return payload
 
 
+def build_subtask_planning_prompt(
+    current_image: Any,
+    language_instruction: str,
+    formal_goal: str,
+    task_tree: Dict[str, Any],
+) -> str:
+    """构建第一阶段子任务规划 prompt。
+
+    这个 prompt 的目标是让 VLM 基于：
+    - 当前图像
+    - 全局任务指令
+    - formal goal
+    - 当前任务树 JSON
+
+    输出最小 schema 的严格 JSON，只包含：
+    - `candidate_subtasks`
+    - `selected_subtask_index`
+    - `selected_subtask_description`
+
+    注意：
+    - `current_image` 在这里不会被序列化进文本 prompt
+    - 它存在的意义是保持接口和未来多模态调用一致
+    - 真正调用模型时，应将当前图像与本 prompt 一起发送
+
+    输入示例：
+        current_image = <numpy image>
+        language_instruction = "Organize selected food items into the white_storage_box"
+        formal_goal = "(And ...)"
+        task_tree = {"root": {"children": []}}
+
+    输出示例：
+        一个字符串 prompt，要求模型只返回如下格式：
+        {
+          "candidate_subtasks": ["...", "..."],
+          "selected_subtask_index": 0,
+          "selected_subtask_description": "..."
+        }
+    """
+    del current_image
+
+    normalized_instruction = _require_non_empty_text(language_instruction, "language_instruction")
+    normalized_goal = _require_non_empty_text(formal_goal, "formal_goal")
+    normalized_task_tree = _normalize_task_tree(task_tree)
+    task_tree_json = _serialize_task_tree_for_prompt(normalized_task_tree)
+
+    return (
+        "You are a robotic task planner. You will be given the current image together with this prompt.\n"
+        "Your job in this stage is to propose candidate subtasks and select exactly one subtask.\n"
+        "Use only the current image, the global instruction, the formal goal, and the current planning tree.\n"
+        "Return strict JSON only. Do not add any explanation, markdown, code fences, or extra fields.\n"
+        "The JSON object must contain exactly these keys:\n"
+        '- "candidate_subtasks": a non-empty list of short strings\n'
+        '- "selected_subtask_index": an integer index into candidate_subtasks, or null\n'
+        '- "selected_subtask_description": the selected string from candidate_subtasks, or null\n'
+        "The selected description must match one item in candidate_subtasks.\n"
+        "Keep the output minimal and task-relevant.\n\n"
+        f"language_instruction:\n{normalized_instruction}\n\n"
+        f"formal_goal:\n{normalized_goal}\n\n"
+        "current_planning_tree_json:\n"
+        f"{task_tree_json}\n\n"
+        "Output strict JSON only."
+    )
+
+
+def build_action_planning_prompt(
+    current_image: Any,
+    language_instruction: str,
+    formal_goal: str,
+    task_tree: Dict[str, Any],
+    selected_subtask_description: str,
+) -> str:
+    """构建第二阶段动作规划 prompt。
+
+    这个 prompt 的目标是让 VLM 基于：
+    - 当前图像
+    - 全局任务指令
+    - formal goal
+    - 当前任务树 JSON
+    - 当前已选 subtask
+
+    输出最小 schema 的严格 JSON，只包含：
+    - `candidate_actions`
+    - `selected_action_index`
+    - `selected_action_description`
+
+    注意：
+    - `current_image` 在这里不会被序列化进文本 prompt
+    - 真正调用模型时，应将当前图像与本 prompt 一起发送
+    - 动作应更细粒度，能直接作为后续 VLA 的 desc 候选
+
+    输入示例：
+        current_image = <numpy image>
+        language_instruction = "Organize selected food items into the white_storage_box"
+        formal_goal = "(And ...)"
+        task_tree = {"root": {"children": []}}
+        selected_subtask_description = "Pick and place cream_cheese_1 into the bottom side of white_storage_box_1"
+
+    输出示例：
+        一个字符串 prompt，要求模型只返回如下格式：
+        {
+          "candidate_actions": ["...", "..."],
+          "selected_action_index": 0,
+          "selected_action_description": "..."
+        }
+    """
+    del current_image
+
+    normalized_instruction = _require_non_empty_text(language_instruction, "language_instruction")
+    normalized_goal = _require_non_empty_text(formal_goal, "formal_goal")
+    normalized_task_tree = _normalize_task_tree(task_tree)
+    normalized_subtask = _require_non_empty_text(
+        selected_subtask_description,
+        "selected_subtask_description",
+    )
+    task_tree_json = _serialize_task_tree_for_prompt(normalized_task_tree)
+
+    return (
+        "You are a robotic task planner. You will be given the current image together with this prompt.\n"
+        "Your job in this stage is to propose candidate atomic actions for the selected subtask and select exactly one action.\n"
+        "Use only the current image, the global instruction, the formal goal, the current planning tree, and the selected subtask.\n"
+        "Return strict JSON only. Do not add any explanation, markdown, code fences, or extra fields.\n"
+        "The JSON object must contain exactly these keys:\n"
+        '- "candidate_actions": a non-empty list of short strings\n'
+        '- "selected_action_index": an integer index into candidate_actions, or null\n'
+        '- "selected_action_description": the selected string from candidate_actions, or null\n'
+        "The selected description must match one item in candidate_actions.\n"
+        "Keep the output minimal, concrete, and directly executable as a short VLA description.\n\n"
+        f"language_instruction:\n{normalized_instruction}\n\n"
+        f"formal_goal:\n{normalized_goal}\n\n"
+        f"selected_subtask:\n{normalized_subtask}\n\n"
+        "current_planning_tree_json:\n"
+        f"{task_tree_json}\n\n"
+        "Output strict JSON only."
+    )
+
+
 def parse_subtask_planning_output(raw_text: str) -> SubtaskPlanningResult:
     """解析第一阶段 VLM 输出，得到稳定的子任务规划结果。
 
@@ -388,6 +579,8 @@ def parse_action_planning_output(raw_text: str) -> ActionPlanningResult:
 __all__ = [
     "ActionPlanningResult",
     "SubtaskPlanningResult",
+    "build_action_planning_prompt",
+    "build_subtask_planning_prompt",
     "parse_action_planning_output",
     "parse_subtask_planning_output",
 ]
