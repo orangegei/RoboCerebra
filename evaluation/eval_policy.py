@@ -31,6 +31,12 @@ from episode import (
 from model_adapters import get_policy_adapter
 from resume import create_step_based_resume_handler
 from robocerebra_logging import log_message, save_results_log, setup_logging
+from task_planner import (
+    build_task_plan_from_bddl,
+    parse_bddl_metadata,
+    parse_bddl_text,
+    write_task_plan_json,
+)
 from task_runner import (
     load_task_data,
     setup_task_descriptions,
@@ -290,6 +296,15 @@ def run_task(
     )
     if not is_valid:
         return 0, 0, 0, 0, base_result
+
+    try:
+        text_info = parse_bddl_text(bddl_file_path)
+        metadata = parse_bddl_metadata(bddl_file_path)
+        task_plan = build_task_plan_from_bddl(text_info, metadata)
+        task_plan_path = write_task_plan_json(task_plan, task_dir)
+        log_message(f"Initialized task planning tree at {task_plan_path}", log_file)
+    except Exception as exc:
+        log_message(f"[WARN] Failed to initialize task planning tree for {task_dir.name}: {exc}", log_file)
 
     from utils import load_init_state, setup_dynamic_distractor_info
 
