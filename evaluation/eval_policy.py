@@ -70,7 +70,7 @@ def _get_libero_dummy_action(model_family: str):
         from experiments.robot.libero.libero_utils import get_libero_dummy_action
         return get_libero_dummy_action(model_family)
     except ImportError:
-        return [0.0] * 7
+        return [0, 0, 0, 0, 0, 0, -1]
 
 
 def run_episode(
@@ -179,16 +179,17 @@ def run_episode(
 
         from utils import prepare_observation
 
+        # obs
         observation, img = prepare_observation(obs, policy_runtime.resize_size)
         replay_images_all.append(img)
         replay_images_seg.append(img)
 
         if cfg.task_description_suffix != "" and not cfg.complete_description:
             desc = naming_step_desc[step_idx]
-        else:
+        else: # desc
             desc = full_description if cfg.complete_description else model_step_desc[step_idx]
 
-        if not action_queue:
+        if not action_queue: # infer
             actions = policy_adapter.predict_actions(cfg, policy_runtime, observation, desc)
             action_queue.extend(actions)
         raw_action = action_queue.popleft()
