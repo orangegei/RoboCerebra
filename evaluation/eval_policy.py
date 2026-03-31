@@ -193,15 +193,37 @@ def run_episode(
 
         if cfg.use_vlm_planner and planner_runtime is not None and current_task_tree is not None:
             try:
-                from vlm_planner import plan_subtasks
+                from vlm_planner import plan_actions, plan_subtasks
 
                 subtask_result = plan_subtasks(cfg, planner_runtime, observation, current_task_tree)
                 if subtask_result.selected_subtask_description is not None:
+                    selected_action_description = None
+                    candidate_actions = None
+                    try:
+                        action_result = plan_actions(
+                            cfg,
+                            planner_runtime,
+                            observation,
+                            current_task_tree,
+                            subtask_result.selected_subtask_description,
+                        )
+                        selected_action_description = action_result.selected_action_description
+                        candidate_actions = action_result.candidate_actions
+                        if selected_action_description is None:
+                            log_message(
+                                f"[WARN] Action planner returned no selected_action_description at step {t}",
+                                log_file,
+                            )
+                    except Exception as action_exc:
+                        log_message(f"[WARN] Action planning failed at step {t}: {action_exc}", log_file)
+
                     record_planning_step(
                         current_task_tree,
                         step=t,
                         selected_subtask_description=subtask_result.selected_subtask_description,
                         candidate_subtasks=subtask_result.candidate_subtasks,
+                        selected_action_description=selected_action_description,
+                        candidate_actions=candidate_actions,
                     )
                 else:
                     log_message(
