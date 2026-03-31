@@ -83,10 +83,7 @@ def test_task_plan_bootstrap_writes_expected_json(tmp_path, monkeypatch):
 
     monkeypatch.setattr(task_planner, "_get_robosuite_parse_problem", fake_get_robosuite_parse_problem)
 
-    text_info = task_planner.parse_bddl_text(bddl_path)
-    metadata = task_planner.parse_bddl_metadata(bddl_path)
-    plan = task_planner.build_task_plan_from_bddl(text_info, metadata)
-    output_path = task_planner.write_task_plan_json(plan, tmp_path)
+    plan, output_path = task_planner.bootstrap_task_plan_from_bddl_file(bddl_path, output_dir=tmp_path)
 
     written = json.loads(output_path.read_text(encoding="utf-8"))
 
@@ -97,7 +94,7 @@ def test_task_plan_bootstrap_writes_expected_json(tmp_path, monkeypatch):
         "(And (On white_storage_box_1 coffee_table_white_storage_box_init_region) "
         "(In cream_cheese_1 white_storage_box_1_bottom_side) "
         "(In popcorn_1 white_storage_box_1_right_side) "
-        "(In butter_1 white_storage_box_1_left_side))"
+        "(In butter_1 white_storage_box_1_left_side) )"
     )
     assert written["root"]["goal_summary"] == [
         "white_storage_box_1 on coffee_table_white_storage_box_init_region",

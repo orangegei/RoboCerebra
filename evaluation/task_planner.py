@@ -175,6 +175,20 @@ def build_task_plan_from_bddl(
     )
 
 
+def bootstrap_task_plan_from_bddl_file(
+    bddl_path: str | Path,
+    output_dir: str | Path | None = None,
+    filename: str = "vlm_planning_tree.json",
+) -> tuple[Dict[str, Any], Path]:
+    text_info = parse_bddl_text(bddl_path)
+    metadata = parse_bddl_metadata(bddl_path)
+    plan = build_task_plan_from_bddl(text_info, metadata)
+
+    target_dir = Path(output_dir) if output_dir is not None else Path(bddl_path).parent
+    output_path = write_task_plan_json(plan, target_dir, filename=filename)
+    return plan, output_path
+
+
 def write_task_plan_json(
     plan: Dict[str, Any],
     output_dir: str | Path,
