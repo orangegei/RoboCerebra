@@ -191,8 +191,14 @@ def run_episode(
         replay_images_all.append(img)
         replay_images_seg.append(img)
 
+        should_replan = cfg.vlm_planner_force_single_step or (not action_queue)
         planner_selected_desc = None
-        if cfg.use_vlm_planner and planner_runtime is not None and current_task_tree is not None:
+        if (
+            should_replan
+            and cfg.use_vlm_planner
+            and planner_runtime is not None
+            and current_task_tree is not None
+        ):
             try:
                 from vlm_planner import plan_actions, plan_subtasks
 

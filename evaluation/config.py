@@ -68,6 +68,7 @@ class GenerateConfig:
     vlm_action_prompt: str = ""
     vlm_planner_max_new_tokens: int = 256 * 8
     vlm_planner_use_wrist_image: bool = False
+    # True: replan at every env step; False: replan only when action_queue is empty (open-loop chunk boundary).
     vlm_planner_force_single_step: bool = True
 
     # ------------------------------------------------------------------
