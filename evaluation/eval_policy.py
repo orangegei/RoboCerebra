@@ -34,6 +34,7 @@ from robocerebra_logging import log_message, save_results_log, setup_logging
 from task_planner import (
     bootstrap_task_plan_from_bddl_file,
     clone_task_plan,
+    record_planning_step,
 )
 from task_runner import (
     load_task_data,
@@ -101,7 +102,7 @@ def run_episode(
 ) -> Tuple[bool, int, int]:
     """Run a single evaluation episode."""
 
-    del task_name, planner_runtime, current_task_tree
+    del task_name
 
     segment_count = len(naming_step_desc) if cfg.task_description_suffix else len(model_step_desc)
     full_description = task_line or "" if cfg.complete_description else None
@@ -189,6 +190,26 @@ def run_episode(
         observation, img = prepare_observation(obs, policy_runtime.resize_size)
         replay_images_all.append(img)
         replay_images_seg.append(img)
+
+        if cfg.use_vlm_planner and planner_runtime is not None and current_task_tree is not None:
+            try:
+                from vlm_planner import plan_subtasks
+
+                subtask_result = plan_subtasks(cfg, planner_runtime, observation, current_task_tree)
+                if subtask_result.selected_subtask_description is not None:
+                    record_planning_step(
+                        current_task_tree,
+                        step=t,
+                        selected_subtask_description=subtask_result.selected_subtask_description,
+                        candidate_subtasks=subtask_result.candidate_subtasks,
+                    )
+                else:
+                    log_message(
+                        f"[WARN] Subtask planner returned no selected_subtask_description at step {t}, skip record",
+                        log_file,
+                    )
+            except Exception as exc:
+                log_message(f"[WARN] Subtask planning failed at step {t}: {exc}", log_file)
 
         if cfg.task_description_suffix != "" and not cfg.complete_description:
             desc = naming_step_desc[step_idx]
