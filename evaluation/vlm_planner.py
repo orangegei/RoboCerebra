@@ -2,6 +2,208 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+from PIL import Image
+
+from config import GenerateConfig
+
+
+@dataclass
+class VLMRuntime:
+    """通用 VLM runtime 容器。
+
+    字段说明：
+    - model: 已加载好的多模态生成模型
+    - processor: 与模型配套的 processor
+    - device: 推理设备，例如 `"cuda"` 或 `"cpu"`
+
+    示例：
+        VLMRuntime(model=<model>, processor=<processor>, device="cuda")
+    """
+    model: Any
+    processor: Any
+    device: str
+
+
+def _to_pil_image(image: np.ndarray) -> Image.Image:
+    """把输入图像统一转成 PIL.Image。
+
+    支持两类输入：
+    - `numpy.ndarray`
+    - `PIL.Image.Image`
+
+    如果是 numpy，会自动裁剪到 `[0, 255]` 并转成 `uint8`。
+
+    输入示例：
+        image = np.zeros((256, 256, 3), dtype=np.uint8)
+
+    输出示例：
+        <PIL.Image.Image image mode=RGB size=256x256>
+    """
+    if isinstance(image, Image.Image):
+        return image
+
+    if not isinstance(image, np.ndarray):
+        raise TypeError(f"Unsupported image type: {type(image)!r}")
+
+    if image.dtype != np.uint8:
+        image = np.clip(image, 0, 255).astype(np.uint8)
+
+    return Image.fromarray(image)
+
+
+def initialize_vlm_runtime(
+    model_path_or_name: str,
+    *,
+    enabled: bool = True,
+) -> Optional[VLMRuntime]:
+    """按模型路径初始化一个通用 VLM runtime。
+
+    这个函数不关心调用方是 observation describer 还是 planner，
+    只负责在需要时加载模型、processor 和 device。
+
+    输入示例：
+        model_path_or_name = "Qwen/Qwen2.5-VL-3B-Instruct"
+        enabled = True
+
+    输出示例：
+        VLMRuntime(model=<model>, processor=<processor>, device="cuda")
+    """
+    if not enabled:
+        return None
+    if not model_path_or_name:
+        raise ValueError("model_path_or_name must be set when VLM generation is enabled")
+
+    import torch
+    from transformers import AutoModelForImageTextToText, AutoProcessor
+
+    processor = AutoProcessor.from_pretrained(model_path_or_name, trust_remote_code=True)
+    model = AutoModelForImageTextToText.from_pretrained(
+        model_path_or_name,
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+    )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+    model.eval()
+
+    return VLMRuntime(model=model, processor=processor, device=device)
+
+
+def initialize(cfg: GenerateConfig) -> Optional[VLMRuntime]:
+    """兼容旧调用方式的 VLM 初始化入口。
+
+    当前会在以下任一开关打开时初始化 VLM：
+    - `cfg.use_vlm_desc`
+    - `cfg.use_vlm_planner`
+
+    这样后续 planner 也可以复用同一个 runtime 初始化入口。
+
+    输入示例：
+        cfg = GenerateConfig(use_vlm_desc=True, vlm_model_path_or_name="...")
+
+    输出示例：
+        VLMRuntime(model=<model>, processor=<processor>, device="cuda")
+    """
+    enabled = bool(cfg.use_vlm_desc or cfg.use_vlm_planner)
+    return initialize_vlm_runtime(
+        cfg.vlm_model_path_or_name,
+        enabled=enabled,
+    )
+
+
+def generate_text_from_observation(
+    runtime: VLMRuntime,
+    observation: dict,
+    *,
+    prompt: str,
+    max_new_tokens: int,
+    use_wrist_image: bool = False,
+    image: np.ndarray | None = None,
+) -> str:
+    """基于 observation 和 prompt 调用 VLM 生成文本。
+
+    这是 planner / describer 共用的通用生成函数。
+    调用方只需要给：
+    - runtime
+    - observation
+    - prompt
+    - 生成长度
+    - 是否附带 wrist image
+
+    输入示例：
+        prompt = "Describe the robot's current task-relevant scene."
+        max_new_tokens = 64
+        use_wrist_image = True
+
+    输出示例：
+        "move gripper above cream_cheese_1"
+    """
+    if runtime is None:
+        raise ValueError("VLM runtime is not initialized")
+
+    import torch
+
+    normalized_prompt = " ".join(prompt.split()).strip()
+    if not normalized_prompt:
+        raise ValueError("prompt must be a non-empty string")
+    if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens <= 0:
+        raise ValueError(f"max_new_tokens must be a positive integer, got {max_new_tokens!r}")
+
+    primary_image = image if image is not None else observation["full_image"]
+    images = [_to_pil_image(primary_image)]
+    if use_wrist_image:
+        images.append(_to_pil_image(observation["wrist_image"]))
+
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image"} for _ in images] + [{"type": "text", "text": normalized_prompt}],
+        }
+    ]
+    text = runtime.processor.apply_chat_template(messages, add_generation_prompt=True)
+    inputs = runtime.processor(images=images, text=text, return_tensors="pt")
+    inputs = {key: value.to(runtime.device) if hasattr(value, "to") else value for key, value in inputs.items()}
+
+    with torch.no_grad():
+        generated_ids = runtime.model.generate(**inputs, max_new_tokens=max_new_tokens)
+
+    prompt_length = inputs["input_ids"].shape[1]
+    generated_text = runtime.processor.batch_decode(
+        generated_ids[:, prompt_length:], skip_special_tokens=True
+    )[0].strip()
+    return generated_text
+
+
+def generate_description(
+    cfg: GenerateConfig,
+    runtime: VLMRuntime,
+    observation: dict,
+    image: np.ndarray | None = None,
+) -> str:
+    """兼容旧 observation describer 调用方式的 wrapper。
+
+    这个函数保留原来的签名和默认 prompt 逻辑，
+    内部实际调用的是通用的 `generate_text_from_observation(...)`。
+
+    输入示例：
+        cfg = GenerateConfig(vlm_prompt="", vlm_max_new_tokens=64)
+        observation = {"full_image": ..., "wrist_image": ...}
+
+    输出示例：
+        "move gripper above cream_cheese_1"
+    """
+    prompt = cfg.vlm_prompt.strip() or "Describe the robot's current task-relevant scene as a short action instruction."
+    return generate_text_from_observation(
+        runtime,
+        observation,
+        prompt=prompt,
+        max_new_tokens=cfg.vlm_max_new_tokens,
+        use_wrist_image=cfg.vlm_use_wrist_image,
+        image=image,
+    )
+
 
 @dataclass
 class SubtaskPlanningResult:
@@ -579,8 +781,13 @@ def parse_action_planning_output(raw_text: str) -> ActionPlanningResult:
 __all__ = [
     "ActionPlanningResult",
     "SubtaskPlanningResult",
+    "VLMRuntime",
     "build_action_planning_prompt",
     "build_subtask_planning_prompt",
+    "generate_description",
+    "generate_text_from_observation",
+    "initialize",
+    "initialize_vlm_runtime",
     "parse_action_planning_output",
     "parse_subtask_planning_output",
 ]
