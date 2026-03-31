@@ -309,6 +309,108 @@ def _normalize_task_tree(task_tree: Any) -> Dict[str, Any]:
     return task_tree
 
 
+def _extract_task_tree_prompt_fields(task_tree: Dict[str, Any]) -> tuple[str, str]:
+    """从任务树中提取 prompt builder 所需的核心字段。
+
+    当前要求任务树顶层至少包含：
+    - `language_instruction`
+    - `formal_goal`
+
+    这两个字段会被归一化并校验非空，确保后续 prompt builder 的输入稳定。
+
+    输入示例：
+        task_tree = {
+            "language_instruction": "Organize selected food items into the white_storage_box",
+            "formal_goal": "(And ...)",
+            "root": {"children": []},
+        }
+
+    输出示例：
+        (
+            "Organize selected food items into the white_storage_box",
+            "(And ...)",
+        )
+    """
+    normalized_task_tree = _normalize_task_tree(task_tree)
+    language_instruction = _require_non_empty_text(
+        normalized_task_tree.get("language_instruction"),
+        "task_tree.language_instruction",
+    )
+    formal_goal = _require_non_empty_text(
+        normalized_task_tree.get("formal_goal"),
+        "task_tree.formal_goal",
+    )
+    return language_instruction, formal_goal
+
+
+def _extract_goal_summary_for_prompt(task_tree: Dict[str, Any]) -> List[str]:
+    """从任务树中提取并规范化 `root.goal_summary`。
+
+    这里把 goal summary 单独拿出来，是为了在 prompt 里显式强调当前任务目标，
+    避免模型只在整棵 JSON 树里被动读取。
+
+    输入示例：
+        task_tree = {
+            "root": {
+                "goal_summary": [
+                    "cream_cheese_1 in white_storage_box_1_bottom_side",
+                    "popcorn_1 in white_storage_box_1_right_side",
+                ]
+            }
+        }
+
+    输出示例：
+        [
+            "cream_cheese_1 in white_storage_box_1_bottom_side",
+            "popcorn_1 in white_storage_box_1_right_side",
+        ]
+    """
+    normalized_task_tree = _normalize_task_tree(task_tree)
+    root = normalized_task_tree.get("root")
+    if not isinstance(root, dict):
+        raise TypeError(f"task_tree.root must be a dict, got {type(root)!r}")
+
+    goal_summary = root.get("goal_summary")
+    if not isinstance(goal_summary, list):
+        raise TypeError(f"task_tree.root.goal_summary must be a list, got {type(goal_summary)!r}")
+
+    normalized_goal_summary: List[str] = []
+    for idx, item in enumerate(goal_summary):
+        normalized_goal_summary.append(
+            _require_non_empty_text(item, f"task_tree.root.goal_summary[{idx}]")
+        )
+
+    if not normalized_goal_summary:
+        raise ValueError("task_tree.root.goal_summary must not be empty")
+    return normalized_goal_summary
+
+
+def _merge_prompt_override(default_prompt: str, override_prompt: str, field_name: str) -> str:
+    """把 cfg 中的可选自定义 prompt 追加到默认 prompt 后面。
+
+    这里不直接替换默认 prompt，而是做“附加说明”式合并：
+    - 默认 prompt 继续负责约束 schema 和上下文
+    - cfg 中的 prompt 只作为额外 planner instruction
+
+    输入示例：
+        default_prompt = "Output strict JSON only."
+        override_prompt = "Prefer object-centric descriptions."
+
+    输出示例：
+        "Output strict JSON only.\\n\\nAdditional planner instruction:\\nPrefer object-centric descriptions."
+    """
+    base_prompt = _require_non_empty_text(default_prompt, "default_prompt")
+    if not override_prompt:
+        return base_prompt
+
+    normalized_override = _require_non_empty_text(override_prompt, field_name)
+    return (
+        f"{base_prompt}\n\n"
+        "Additional planner instruction:\n"
+        f"{normalized_override}"
+    )
+
+
 def _serialize_task_tree_for_prompt(task_tree: Dict[str, Any]) -> str:
     """将任务树序列化成适合拼接到 prompt 中的 JSON 字符串。
 
@@ -582,12 +684,14 @@ def build_subtask_planning_prompt(
     normalized_instruction = _require_non_empty_text(language_instruction, "language_instruction")
     normalized_goal = _require_non_empty_text(formal_goal, "formal_goal")
     normalized_task_tree = _normalize_task_tree(task_tree)
+    normalized_goal_summary = _extract_goal_summary_for_prompt(normalized_task_tree)
     task_tree_json = _serialize_task_tree_for_prompt(normalized_task_tree)
+    goal_summary_text = "\n".join(f"- {item}" for item in normalized_goal_summary)
 
     return (
         "You are a robotic task planner. You will be given the current image together with this prompt.\n"
         "Your job in this stage is to propose candidate subtasks and select exactly one subtask.\n"
-        "Use only the current image, the global instruction, the formal goal, and the current planning tree.\n"
+        "Use only the current image, the global instruction, the formal goal, the goal summary, and the current planning tree.\n"
         "Return strict JSON only. Do not add any explanation, markdown, code fences, or extra fields.\n"
         "The JSON object must contain exactly these keys:\n"
         '- "candidate_subtasks": a non-empty list of short strings\n'
@@ -597,6 +701,7 @@ def build_subtask_planning_prompt(
         "Keep the output minimal and task-relevant.\n\n"
         f"language_instruction:\n{normalized_instruction}\n\n"
         f"formal_goal:\n{normalized_goal}\n\n"
+        f"goal_summary:\n{goal_summary_text}\n\n"
         "current_planning_tree_json:\n"
         f"{task_tree_json}\n\n"
         "Output strict JSON only."
@@ -649,16 +754,18 @@ def build_action_planning_prompt(
     normalized_instruction = _require_non_empty_text(language_instruction, "language_instruction")
     normalized_goal = _require_non_empty_text(formal_goal, "formal_goal")
     normalized_task_tree = _normalize_task_tree(task_tree)
+    normalized_goal_summary = _extract_goal_summary_for_prompt(normalized_task_tree)
     normalized_subtask = _require_non_empty_text(
         selected_subtask_description,
         "selected_subtask_description",
     )
     task_tree_json = _serialize_task_tree_for_prompt(normalized_task_tree)
+    goal_summary_text = "\n".join(f"- {item}" for item in normalized_goal_summary)
 
     return (
         "You are a robotic task planner. You will be given the current image together with this prompt.\n"
         "Your job in this stage is to propose candidate atomic actions for the selected subtask and select exactly one action.\n"
-        "Use only the current image, the global instruction, the formal goal, the current planning tree, and the selected subtask.\n"
+        "Use only the current image, the global instruction, the formal goal, the goal summary, the current planning tree, and the selected subtask.\n"
         "Return strict JSON only. Do not add any explanation, markdown, code fences, or extra fields.\n"
         "The JSON object must contain exactly these keys:\n"
         '- "candidate_actions": a non-empty list of short strings\n'
@@ -668,6 +775,7 @@ def build_action_planning_prompt(
         "Keep the output minimal, concrete, and directly executable as a short VLA description.\n\n"
         f"language_instruction:\n{normalized_instruction}\n\n"
         f"formal_goal:\n{normalized_goal}\n\n"
+        f"goal_summary:\n{goal_summary_text}\n\n"
         f"selected_subtask:\n{normalized_subtask}\n\n"
         "current_planning_tree_json:\n"
         f"{task_tree_json}\n\n"
@@ -778,6 +886,110 @@ def parse_action_planning_output(raw_text: str) -> ActionPlanningResult:
     )
 
 
+def plan_subtasks(
+    cfg: GenerateConfig,
+    runtime: VLMRuntime,
+    observation: dict,
+    task_tree: Dict[str, Any],
+) -> SubtaskPlanningResult:
+    """执行第一阶段子任务规划。
+
+    内部流程：
+    - 从 `task_tree` 提取 `language_instruction` 和 `formal_goal`
+    - 用 `build_subtask_planning_prompt(...)` 构造默认 prompt
+    - 如配置了 `cfg.vlm_subtask_prompt`，把它作为附加说明拼到默认 prompt 后面
+    - 调 `generate_text_from_observation(...)`
+    - 用 `parse_subtask_planning_output(...)` 解析成结构化结果
+
+    这个函数只返回文本层面的规划结果，不修改任务树。
+
+    输入示例：
+        cfg = GenerateConfig(use_vlm_planner=True, vlm_model_path_or_name="...")
+        observation = {"full_image": ..., "wrist_image": ...}
+        task_tree = {
+            "language_instruction": "Organize selected food items into the white_storage_box",
+            "formal_goal": "(And ...)",
+            "root": {"children": [], "history": []},
+        }
+
+    输出示例：
+        SubtaskPlanningResult(
+            candidate_subtasks=[
+                "Pick and place cream_cheese_1 into the bottom side of white_storage_box_1",
+                "Pick and place popcorn_1 into the right side of white_storage_box_1",
+            ],
+            selected_subtask_index=0,
+            selected_subtask_description="Pick and place cream_cheese_1 into the bottom side of white_storage_box_1",
+        )
+    """
+    language_instruction, formal_goal = _extract_task_tree_prompt_fields(task_tree)
+    default_prompt = build_subtask_planning_prompt(
+        current_image=observation.get("full_image"),
+        language_instruction=language_instruction,
+        formal_goal=formal_goal,
+        task_tree=task_tree,
+    )
+    prompt = _merge_prompt_override(default_prompt, cfg.vlm_subtask_prompt, "cfg.vlm_subtask_prompt")
+    raw_text = generate_text_from_observation(
+        runtime,
+        observation,
+        prompt=prompt,
+        max_new_tokens=cfg.vlm_planner_max_new_tokens,
+        use_wrist_image=cfg.vlm_planner_use_wrist_image,
+    )
+    return parse_subtask_planning_output(raw_text)
+
+
+def plan_actions(
+    cfg: GenerateConfig,
+    runtime: VLMRuntime,
+    observation: dict,
+    task_tree: Dict[str, Any],
+    selected_subtask_description: str,
+) -> ActionPlanningResult:
+    """执行第二阶段动作规划。
+
+    内部流程：
+    - 从 `task_tree` 提取 `language_instruction` 和 `formal_goal`
+    - 用 `build_action_planning_prompt(...)` 构造默认 prompt
+    - 如配置了 `cfg.vlm_action_prompt`，把它作为附加说明拼到默认 prompt 后面
+    - 调 `generate_text_from_observation(...)`
+    - 用 `parse_action_planning_output(...)` 解析成结构化结果
+
+    这个函数只返回文本层面的动作结果，不修改任务树。
+
+    输入示例：
+        selected_subtask_description = "Pick and place cream_cheese_1 into the bottom side of white_storage_box_1"
+
+    输出示例：
+        ActionPlanningResult(
+            candidate_actions=[
+                "move gripper above cream_cheese_1",
+                "grasp cream_cheese_1",
+            ],
+            selected_action_index=0,
+            selected_action_description="move gripper above cream_cheese_1",
+        )
+    """
+    language_instruction, formal_goal = _extract_task_tree_prompt_fields(task_tree)
+    default_prompt = build_action_planning_prompt(
+        current_image=observation.get("full_image"),
+        language_instruction=language_instruction,
+        formal_goal=formal_goal,
+        task_tree=task_tree,
+        selected_subtask_description=selected_subtask_description,
+    )
+    prompt = _merge_prompt_override(default_prompt, cfg.vlm_action_prompt, "cfg.vlm_action_prompt")
+    raw_text = generate_text_from_observation(
+        runtime,
+        observation,
+        prompt=prompt,
+        max_new_tokens=cfg.vlm_planner_max_new_tokens,
+        use_wrist_image=cfg.vlm_planner_use_wrist_image,
+    )
+    return parse_action_planning_output(raw_text)
+
+
 __all__ = [
     "ActionPlanningResult",
     "SubtaskPlanningResult",
@@ -788,6 +1000,8 @@ __all__ = [
     "generate_text_from_observation",
     "initialize",
     "initialize_vlm_runtime",
+    "plan_actions",
+    "plan_subtasks",
     "parse_action_planning_output",
     "parse_subtask_planning_output",
 ]
