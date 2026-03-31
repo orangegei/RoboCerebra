@@ -191,12 +191,14 @@ def run_episode(
         replay_images_all.append(img)
         replay_images_seg.append(img)
 
+        planner_selected_desc = None
         if cfg.use_vlm_planner and planner_runtime is not None and current_task_tree is not None:
             try:
                 from vlm_planner import plan_actions, plan_subtasks
 
                 subtask_result = plan_subtasks(cfg, planner_runtime, observation, current_task_tree)
                 if subtask_result.selected_subtask_description is not None:
+                    planner_selected_desc = subtask_result.selected_subtask_description
                     selected_action_description = None
                     candidate_actions = None
                     try:
@@ -214,6 +216,8 @@ def run_episode(
                                 f"[WARN] Action planner returned no selected_action_description at step {t}",
                                 log_file,
                             )
+                        else:
+                            planner_selected_desc = selected_action_description
                     except Exception as action_exc:
                         log_message(f"[WARN] Action planning failed at step {t}: {action_exc}", log_file)
 
@@ -233,7 +237,9 @@ def run_episode(
             except Exception as exc:
                 log_message(f"[WARN] Subtask planning failed at step {t}: {exc}", log_file)
 
-        if cfg.task_description_suffix != "" and not cfg.complete_description:
+        if planner_selected_desc is not None:
+            desc = planner_selected_desc
+        elif cfg.task_description_suffix != "" and not cfg.complete_description:
             desc = naming_step_desc[step_idx]
         else: # desc
             desc = full_description if cfg.complete_description else model_step_desc[step_idx]
