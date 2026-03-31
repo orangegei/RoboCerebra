@@ -70,6 +70,9 @@ class GenerateConfig:
     vlm_planner_use_wrist_image: bool = False
     # True: replan at every env step; False: replan only when action_queue is empty (open-loop chunk boundary).
     vlm_planner_force_single_step: bool = True
+    # Baseline experiment: bypass planner and directly compose policy desc from task tree
+    # (language_instruction + root.goal_summary).
+    use_task_tree_desc_baseline: bool = False
 
     # ------------------------------------------------------------------
     # RoboCerebra environment‑specific parameters
@@ -125,5 +128,10 @@ def validate_config(cfg: GenerateConfig) -> None:
     if "image_aug" in str(cfg.pretrained_checkpoint):
         assert cfg.center_crop, "Expecting center_crop=True because model was trained with image augmentations!"
     assert not (cfg.load_in_8bit and cfg.load_in_4bit), "Cannot use both 8‑bit and 4‑bit quantization!"
+    if cfg.use_task_tree_desc_baseline:
+        assert not cfg.use_vlm_planner, (
+            "use_task_tree_desc_baseline=True expects use_vlm_planner=False "
+            "(this baseline is intended to test no-planning behavior)."
+        )
     if cfg.dynamic:
         assert cfg.resume

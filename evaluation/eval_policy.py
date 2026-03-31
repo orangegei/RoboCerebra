@@ -191,10 +191,11 @@ def run_episode(
         replay_images_all.append(img)
         replay_images_seg.append(img)
 
-        should_replan = cfg.vlm_planner_force_single_step or (not action_queue)
         planner_selected_desc = None
+        should_replan = cfg.vlm_planner_force_single_step or (not action_queue)
         if (
-            should_replan
+            (not cfg.use_task_tree_desc_baseline)
+            and should_replan
             and cfg.use_vlm_planner
             and planner_runtime is not None
             and current_task_tree is not None
@@ -243,7 +244,39 @@ def run_episode(
             except Exception as exc:
                 log_message(f"[WARN] Subtask planning failed at step {t}: {exc}", log_file)
 
-        if planner_selected_desc is not None:
+        if cfg.use_task_tree_desc_baseline and current_task_tree is not None:
+            language_instruction = current_task_tree.get("language_instruction")
+            normalized_language_instruction = None
+            if isinstance(language_instruction, str):
+                normalized_language_instruction = " ".join(language_instruction.split()).strip()
+                if not normalized_language_instruction:
+                    normalized_language_instruction = None
+
+            normalized_goal_summary: List[str] = []
+            root = current_task_tree.get("root")
+            if isinstance(root, dict):
+                goal_summary = root.get("goal_summary")
+                if isinstance(goal_summary, list):
+                    for item in goal_summary:
+                        if isinstance(item, str):
+                            normalized_item = " ".join(item.split()).strip()
+                            if normalized_item:
+                                normalized_goal_summary.append(normalized_item)
+
+            if normalized_language_instruction is not None and normalized_goal_summary:
+                desc = (
+                    f"{normalized_language_instruction}. "
+                    f"Goal summary: {'; '.join(normalized_goal_summary)}"
+                )
+            elif normalized_language_instruction is not None:
+                desc = normalized_language_instruction
+            elif normalized_goal_summary:
+                desc = f"Goal summary: {'; '.join(normalized_goal_summary)}"
+            elif cfg.task_description_suffix != "" and not cfg.complete_description:
+                desc = naming_step_desc[step_idx]
+            else:
+                desc = full_description if cfg.complete_description else model_step_desc[step_idx]
+        elif planner_selected_desc is not None:
             desc = planner_selected_desc
         elif cfg.task_description_suffix != "" and not cfg.complete_description:
             desc = naming_step_desc[step_idx]
@@ -433,6 +466,13 @@ def run_task(
             "resume": cfg.resume,
             "complete_description": cfg.complete_description,
             "excludes_forced_completions": cfg.dynamic_shift_description,
+            "use_vlm_planner": cfg.use_vlm_planner,
+            "use_task_tree_desc_baseline": cfg.use_task_tree_desc_baseline,
+            "desc_source": (
+                "task_tree_language_instruction_plus_goal_summary"
+                if cfg.use_task_tree_desc_baseline
+                else ("vlm_planner_then_default_fallback" if cfg.use_vlm_planner else "default_task_description")
+            ),
         },
     }
 
@@ -474,17 +514,34 @@ def run_evaluation(cfg: GenerateConfig) -> float:
     log_file, _, run_id, results_log_filepath = setup_logging(cfg)
 
     planner_runtime = None
-    if cfg.use_vlm_planner:
+    if cfg.use_vlm_planner and not cfg.use_task_tree_desc_baseline:
         from vlm_planner import initialize as initialize_vlm_planner
 
         planner_runtime = initialize_vlm_planner(cfg)
         log_message("Initialized VLM planner runtime", log_file)
+    elif cfg.use_vlm_planner and cfg.use_task_tree_desc_baseline:
+        log_message(
+            "Skipped VLM planner runtime initialization because task-tree desc baseline is enabled",
+            log_file,
+        )
 
     log_message("Starting RoboCerebra evaluation", log_file)
     log_message(f"Model family: {cfg.model_family}", log_file)
     log_message(f"RoboCerebra root: {cfg.robocerebra_root}", log_file)
     log_message(f"Init files root: {cfg.init_files_root}", log_file)
     log_message(f"Use init files: {cfg.use_init_files}", log_file)
+    log_message(f"Use VLM planner: {cfg.use_vlm_planner}", log_file)
+    log_message(f"Use task-tree desc baseline: {cfg.use_task_tree_desc_baseline}", log_file)
+    log_message(
+        "Policy desc source: task_tree(language_instruction + goal_summary)"
+        if cfg.use_task_tree_desc_baseline
+        else (
+            "Policy desc source: vlm_planner selected action/subtask with fallback"
+            if cfg.use_vlm_planner
+            else "Policy desc source: default task description"
+        ),
+        log_file,
+    )
     log_message(f"Task types: {cfg.task_types}", log_file)
     log_message(
         f"Dynamic parameters - dynamic: {cfg.dynamic}, dynamic_shift_description: {cfg.dynamic_shift_description}, resume: {cfg.resume}",
