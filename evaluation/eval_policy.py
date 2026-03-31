@@ -33,6 +33,7 @@ from resume import create_step_based_resume_handler
 from robocerebra_logging import log_message, save_results_log, setup_logging
 from task_planner import (
     bootstrap_task_plan_from_bddl_file,
+    clone_task_plan,
 )
 from task_runner import (
     load_task_data,
@@ -95,10 +96,12 @@ def run_episode(
     case_name: str = "",
     initial_state: Optional[np.ndarray] = None,
     resume_handler: Optional[Dict[str, Any]] = None,
+    planner_runtime: Any = None,
+    current_task_tree: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, int, int]:
     """Run a single evaluation episode."""
 
-    del task_name
+    del task_name, planner_runtime, current_task_tree
 
     segment_count = len(naming_step_desc) if cfg.task_description_suffix else len(model_step_desc)
     full_description = task_line or "" if cfg.complete_description else None
@@ -231,6 +234,7 @@ def run_task(
     task_dir: Path,
     policy_adapter,
     policy_runtime,
+    planner_runtime: Any = None,
     log_file=None,
 ) -> Tuple[int, int, int, int, Dict]:
     """Evaluate a single task directory."""
@@ -294,9 +298,10 @@ def run_task(
     if not is_valid:
         return 0, 0, 0, 0, base_result
 
-    # Initialize task planning tree from BDDL file (if available)
+    # Initialize base task planning tree from BDDL file (if available)
+    base_task_tree: Optional[Dict[str, Any]] = None
     try:
-        _, task_plan_path = bootstrap_task_plan_from_bddl_file(bddl_file_path, output_dir=task_dir)
+        base_task_tree, task_plan_path = bootstrap_task_plan_from_bddl_file(bddl_file_path, output_dir=task_dir)
         log_message(f"Initialized task planning tree at {task_plan_path}", log_file)
     except Exception as exc:
         log_message(f"[WARN] Failed to initialize task planning tree for {task_dir.name}: {exc}", log_file)
@@ -315,6 +320,8 @@ def run_task(
     task_possible_subtasks = 0
 
     for ep_idx in tqdm.tqdm(range(episodes)):
+        current_task_tree = clone_task_plan(base_task_tree) if base_task_tree is not None else None
+
         initial_state = None
         if initial_states and initial_states[0] is not None:
             if cfg.initial_states_path == "DEFAULT":
@@ -341,6 +348,8 @@ def run_task(
             case_name=task_dir.name,
             initial_state=initial_state,
             resume_handler=resume_handler,
+            planner_runtime=planner_runtime,
+            current_task_tree=current_task_tree,
         )
         successes += int(succ)
         task_agent_subtasks += ep_subtasks
@@ -409,6 +418,13 @@ def run_evaluation(cfg: GenerateConfig) -> float:
 
     log_file, _, run_id, results_log_filepath = setup_logging(cfg)
 
+    planner_runtime = None
+    if cfg.use_vlm_planner:
+        from vlm_planner import initialize as initialize_vlm_planner
+
+        planner_runtime = initialize_vlm_planner(cfg)
+        log_message("Initialized VLM planner runtime", log_file)
+
     log_message("Starting RoboCerebra evaluation", log_file)
     log_message(f"Model family: {cfg.model_family}", log_file)
     log_message(f"RoboCerebra root: {cfg.robocerebra_root}", log_file)
@@ -454,7 +470,7 @@ def run_evaluation(cfg: GenerateConfig) -> float:
 
         for _, task_dir in task_type_dirs:
             eps, succ, subtasks, possible, task_result = run_task(
-                cfg, task_type, task_dir, policy_adapter, policy_runtime, log_file
+                cfg, task_type, task_dir, policy_adapter, policy_runtime, planner_runtime, log_file
             )
             all_task_results.append(task_result)
             task_type_episodes += eps
