@@ -30,11 +30,17 @@ from episode import (
 )
 from model_adapters import get_policy_adapter
 from resume import create_step_based_resume_handler
-from robocerebra_logging import log_message, save_results_log, setup_logging
+from robocerebra_logging import (
+    get_rollout_task_dir,
+    log_message,
+    save_results_log,
+    setup_logging,
+)
 from task_planner import (
     bootstrap_task_plan_from_bddl_file,
     clone_task_plan,
     record_planning_step,
+    write_task_plan_json,
 )
 from task_runner import (
     load_task_data,
@@ -386,10 +392,19 @@ def run_task(
     if not is_valid:
         return 0, 0, 0, 0, base_result
 
+    rollout_task_dir = get_rollout_task_dir(
+        task_suite=f"{cfg.task_suite_name}_{task_type}",
+        task_name=task_dir.name,
+    )
+
     # Initialize base task planning tree from BDDL file (if available)
     base_task_tree: Optional[Dict[str, Any]] = None
     try:
-        base_task_tree, task_plan_path = bootstrap_task_plan_from_bddl_file(bddl_file_path, output_dir=task_dir)
+        base_task_tree, task_plan_path = bootstrap_task_plan_from_bddl_file(
+            bddl_file_path,
+            output_dir=rollout_task_dir,
+            filename="vlm_planning_tree_base.json",
+        )
         log_message(f"Initialized task planning tree at {task_plan_path}", log_file)
     except Exception as exc:
         log_message(f"[WARN] Failed to initialize task planning tree for {task_dir.name}: {exc}", log_file)
@@ -439,6 +454,19 @@ def run_task(
             planner_runtime=planner_runtime,
             current_task_tree=current_task_tree,
         )
+        if current_task_tree is not None:
+            try:
+                episode_tree_path = write_task_plan_json(
+                    current_task_tree,
+                    rollout_task_dir,
+                    filename=f"vlm_planning_tree_episode={ep_idx}.json",
+                )
+                log_message(f"Saved episode task planning tree at {episode_tree_path}", log_file)
+            except Exception as exc:
+                log_message(
+                    f"[WARN] Failed to save episode task planning tree for {task_dir.name} ep={ep_idx}: {exc}",
+                    log_file,
+                )
         successes += int(succ)
         task_agent_subtasks += ep_subtasks
         task_possible_subtasks += ep_goals

@@ -28,6 +28,21 @@ BASE_DIR = Path.cwd() / "rollouts" / DATE_TIME
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def get_rollout_task_dir(task_suite: str = "", task_name: str = "") -> Path:
+    """Return rollout directory path: rollouts/{DATE_TIME}/{task_suite}/{case_name}."""
+    if task_suite and task_name:
+        clean_task_suite = task_suite.replace(" ", "_")
+        clean_task_name = task_name.replace(" ", "_")
+        rollout_dir = BASE_DIR / clean_task_suite / clean_task_name
+    elif task_name:
+        clean_task_name = task_name.replace(" ", "_")
+        rollout_dir = BASE_DIR / clean_task_name
+    else:
+        rollout_dir = BASE_DIR
+    rollout_dir.mkdir(parents=True, exist_ok=True)
+    return rollout_dir
+
+
 def setup_logging(cfg: GenerateConfig):
     run_id = f"EVAL-{cfg.task_suite_name}-{cfg.model_family}-{DATE_TIME}"
     if cfg.run_id_note:
@@ -114,19 +129,7 @@ def save_rollout_video(
     task_name: str = ""
 ):
     """Saves an MP4 replay of an episode with organized directory structure."""
-    # Create hierarchical directory structure: rollouts/{DATE_TIME}/{task_suite}/{case_name}
-    if task_suite and task_name:
-        # Clean directory names by replacing spaces with underscores
-        clean_task_suite = task_suite.replace(' ', '_')
-        clean_task_name = task_name.replace(' ', '_')
-        rollout_dir = BASE_DIR / clean_task_suite / clean_task_name
-    elif task_name:
-        clean_task_name = task_name.replace(' ', '_')
-        rollout_dir = BASE_DIR / clean_task_name
-    else:
-        rollout_dir = BASE_DIR
-    
-    os.makedirs(rollout_dir, exist_ok=True)
+    rollout_dir = get_rollout_task_dir(task_suite=task_suite, task_name=task_name)
     processed_task_description = task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
     
     # Include task suite in video filename
