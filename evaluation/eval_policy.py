@@ -127,6 +127,8 @@ def run_episode(
     action_queue: deque[np.ndarray] = deque(maxlen=cfg.num_open_loop_steps)
     replay_images_all: List[np.ndarray] = []
     replay_images_seg: List[np.ndarray] = []
+    planner_desc_cache: Optional[str] = None
+    planner_steps_remaining = 0
     t = 0
     max_steps = cfg.switch_steps * segment_count
     prev_step_idx = 0
@@ -158,7 +160,7 @@ def run_episode(
         if t % cfg.switch_steps == 0 and cfg.dynamic and distractor_info:
             seg_mid_moved = False
 
-        if t > 0 and step_idx != prev_step_idx:
+        if (not cfg.use_vlm_planner) and t > 0 and step_idx != prev_step_idx:
             comp_start_dict, replay_images_seg, seg_increment_accum, _, skip_increment, new_trigger = (
                 handle_segment_transition(
                     cfg,
@@ -198,13 +200,15 @@ def run_episode(
         replay_images_seg.append(img)
 
         planner_selected_desc = None
-        should_replan = cfg.vlm_planner_force_single_step or (not action_queue)
-        if (
+        planner_enabled = (
             (not cfg.use_task_tree_desc_baseline)
-            and should_replan
             and cfg.use_vlm_planner
             and planner_runtime is not None
             and current_task_tree is not None
+        )
+        if (
+            planner_enabled
+            and planner_steps_remaining <= 0
         ):
             try:
                 from vlm_planner import plan_actions, plan_subtasks
@@ -250,6 +254,26 @@ def run_episode(
             except Exception as exc:
                 log_message(f"[WARN] Subtask planning failed at step {t}: {exc}", log_file)
 
+            if planner_selected_desc is not None:
+                planner_desc_cache = planner_selected_desc
+                planner_steps_remaining = cfg.switch_steps
+                action_queue.clear()
+                log_message(
+                    f"[VLMPlanner] Planned new desc at step {t}; execute next {planner_steps_remaining} steps with this desc",
+                    log_file,
+                )
+            elif planner_desc_cache is not None:
+                planner_steps_remaining = cfg.switch_steps
+                log_message(
+                    f"[WARN] Planner produced no usable desc at step {t}; fallback to previous planner desc for next {planner_steps_remaining} steps",
+                    log_file,
+                )
+            else:
+                log_message(
+                    f"[WARN] Planner produced no usable desc at step {t}; no previous planner desc available, using default desc fallback",
+                    log_file,
+                )
+
         if cfg.use_task_tree_desc_baseline and current_task_tree is not None:
             language_instruction = current_task_tree.get("language_instruction")
             normalized_language_instruction = None
@@ -282,19 +306,26 @@ def run_episode(
                 desc = naming_step_desc[step_idx]
             else:
                 desc = full_description if cfg.complete_description else model_step_desc[step_idx]
-        elif planner_selected_desc is not None:
-            desc = planner_selected_desc
+        elif planner_enabled and planner_desc_cache is not None:
+            desc = planner_desc_cache
         elif cfg.task_description_suffix != "" and not cfg.complete_description:
             desc = naming_step_desc[step_idx]
         else: # desc
             desc = full_description if cfg.complete_description else model_step_desc[step_idx]
 
         if not action_queue: # infer
+            logged_desc = " ".join(desc.split()) if isinstance(desc, str) else str(desc)
+            log_message(
+                f"[PolicyDesc] episode={episode_idx} env_step={t} segment_step={step_idx} desc={logged_desc}",
+                log_file,
+            )
             actions = policy_adapter.predict_actions(cfg, policy_runtime, observation, desc)
             action_queue.extend(actions)
         raw_action = action_queue.popleft()
 
         obs, _, _, _ = env.step(policy_adapter.postprocess_action(cfg, raw_action).tolist())
+        if planner_enabled and planner_steps_remaining > 0:
+            planner_steps_remaining -= 1
         t += 1
 
         seg_diff, total_completed_prev = update_completion_tracking(
