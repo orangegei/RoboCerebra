@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=eval_pi0_libero           # 作业名
+#SBATCH --job-name=eval_pi0_vlm          # 作业名
 #SBATCH --partition=gpuB                # 使用 gpuB 分区
 #SBATCH --nodes=1                       # 只使用一个节点
 #SBATCH --ntasks-per-node=1             # 一个训练任务（DDP rank 0）

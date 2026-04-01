@@ -58,11 +58,7 @@ class GenerateConfig:
     unnorm_key: Union[str, Path] = "robocerebra"
     load_in_8bit: bool = False
     load_in_4bit: bool = False
-    use_vlm_desc: bool = False
     vlm_model_path_or_name: str = ""
-    vlm_prompt: str = ""
-    vlm_max_new_tokens: int = 64
-    vlm_use_wrist_image: bool = False
     use_vlm_planner: bool = False
     vlm_subtask_prompt: str = ""
     vlm_action_prompt: str = ""

@@ -515,9 +515,9 @@ def run_evaluation(cfg: GenerateConfig) -> float:
 
     planner_runtime = None
     if cfg.use_vlm_planner and not cfg.use_task_tree_desc_baseline:
-        from vlm_planner import initialize as initialize_vlm_planner
+        from vlm_planner import initialize_vlm_runtime
 
-        planner_runtime = initialize_vlm_planner(cfg)
+        planner_runtime = initialize_vlm_runtime(cfg.vlm_model_path_or_name, enabled=True)
         log_message("Initialized VLM planner runtime", log_file)
     elif cfg.use_vlm_planner and cfg.use_task_tree_desc_baseline:
         log_message(

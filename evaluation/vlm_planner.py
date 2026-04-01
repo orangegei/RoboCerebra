@@ -59,8 +59,7 @@ def initialize_vlm_runtime(
 ) -> Optional[VLMRuntime]:
     """按模型路径初始化一个通用 VLM runtime。
 
-    这个函数不关心调用方是 observation describer 还是 planner，
-    只负责在需要时加载模型、processor 和 device。
+    这个函数只负责在需要时加载模型、processor 和 device。
 
     输入示例：
         model_path_or_name = "Qwen/Qwen2.5-VL-3B-Instruct"
@@ -91,28 +90,6 @@ def initialize_vlm_runtime(
     return VLMRuntime(model=model, processor=processor, device=device)
 
 
-def initialize(cfg: GenerateConfig) -> Optional[VLMRuntime]:
-    """兼容旧调用方式的 VLM 初始化入口。
-
-    当前会在以下任一开关打开时初始化 VLM：
-    - `cfg.use_vlm_desc`
-    - `cfg.use_vlm_planner`
-
-    这样后续 planner 也可以复用同一个 runtime 初始化入口。
-
-    输入示例：
-        cfg = GenerateConfig(use_vlm_desc=True, vlm_model_path_or_name="...")
-
-    输出示例：
-        VLMRuntime(model=<model>, processor=<processor>, device="cuda")
-    """
-    enabled = bool(cfg.use_vlm_desc or cfg.use_vlm_planner)
-    return initialize_vlm_runtime(
-        cfg.vlm_model_path_or_name,
-        enabled=enabled,
-    )
-
-
 def generate_text_from_observation(
     runtime: VLMRuntime,
     observation: dict,
@@ -124,7 +101,7 @@ def generate_text_from_observation(
 ) -> str:
     """基于 observation 和 prompt 调用 VLM 生成文本。
 
-    这是 planner / describer 共用的通用生成函数。
+    这是 planner 使用的通用生成函数。
     调用方只需要给：
     - runtime
     - observation
@@ -174,35 +151,6 @@ def generate_text_from_observation(
         generated_ids[:, prompt_length:], skip_special_tokens=True
     )[0].strip()
     return generated_text
-
-
-def generate_description(
-    cfg: GenerateConfig,
-    runtime: VLMRuntime,
-    observation: dict,
-    image: np.ndarray | None = None,
-) -> str:
-    """兼容旧 observation describer 调用方式的 wrapper。
-
-    这个函数保留原来的签名和默认 prompt 逻辑，
-    内部实际调用的是通用的 `generate_text_from_observation(...)`。
-
-    输入示例：
-        cfg = GenerateConfig(vlm_prompt="", vlm_max_new_tokens=64)
-        observation = {"full_image": ..., "wrist_image": ...}
-
-    输出示例：
-        "move gripper above cream_cheese_1"
-    """
-    prompt = cfg.vlm_prompt.strip() or "Describe the robot's current task-relevant scene as a short action instruction."
-    return generate_text_from_observation(
-        runtime,
-        observation,
-        prompt=prompt,
-        max_new_tokens=cfg.vlm_max_new_tokens,
-        use_wrist_image=cfg.vlm_use_wrist_image,
-        image=image,
-    )
 
 
 @dataclass
@@ -996,9 +944,7 @@ __all__ = [
     "VLMRuntime",
     "build_action_planning_prompt",
     "build_subtask_planning_prompt",
-    "generate_description",
     "generate_text_from_observation",
-    "initialize",
     "initialize_vlm_runtime",
     "plan_actions",
     "plan_subtasks",
