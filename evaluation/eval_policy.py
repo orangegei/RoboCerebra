@@ -84,6 +84,16 @@ def _get_libero_dummy_action(model_family: str):
         return [0, 0, 0, 0, 0, 0, -1]
 
 
+def _compact_text_for_log(value: Any, *, max_chars: int = 1000) -> str:
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    text = text.replace("\r", "\\r").replace("\n", "\\n")
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars]}...(truncated, total_chars={len(text)})"
+
+
 def run_episode(
     cfg: GenerateConfig,
     env,
@@ -214,6 +224,22 @@ def run_episode(
                 from vlm_planner import plan_actions, plan_subtasks
 
                 subtask_result = plan_subtasks(cfg, planner_runtime, observation, current_task_tree)
+                log_message(
+                    (
+                        f"[VLMRaw] episode={episode_idx} env_step={t} stage=subtask "
+                        f"raw={_compact_text_for_log(subtask_result.raw_output)}"
+                    ),
+                    log_file,
+                )
+                log_message(
+                    (
+                        f"[VLMParsed] episode={episode_idx} env_step={t} stage=subtask "
+                        f"selected_index={subtask_result.selected_subtask_index} "
+                        f"selected_desc={subtask_result.selected_subtask_description!r} "
+                        f"candidates={subtask_result.candidate_subtasks}"
+                    ),
+                    log_file,
+                )
                 if subtask_result.selected_subtask_description is not None:
                     planner_selected_desc = subtask_result.selected_subtask_description
                     selected_action_description = None
@@ -225,6 +251,22 @@ def run_episode(
                             observation,
                             current_task_tree,
                             subtask_result.selected_subtask_description,
+                        )
+                        log_message(
+                            (
+                                f"[VLMRaw] episode={episode_idx} env_step={t} stage=action "
+                                f"raw={_compact_text_for_log(action_result.raw_output)}"
+                            ),
+                            log_file,
+                        )
+                        log_message(
+                            (
+                                f"[VLMParsed] episode={episode_idx} env_step={t} stage=action "
+                                f"selected_index={action_result.selected_action_index} "
+                                f"selected_desc={action_result.selected_action_description!r} "
+                                f"candidates={action_result.candidate_actions}"
+                            ),
+                            log_file,
                         )
                         selected_action_description = action_result.selected_action_description
                         candidate_actions = action_result.candidate_actions

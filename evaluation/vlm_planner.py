@@ -175,6 +175,8 @@ class SubtaskPlanningResult:
     candidate_subtasks: List[str]
     selected_subtask_index: Optional[int]
     selected_subtask_description: Optional[str]
+    prompt: Optional[str] = None
+    raw_output: Optional[str] = None
 
 
 @dataclass
@@ -199,6 +201,8 @@ class ActionPlanningResult:
     candidate_actions: List[str]
     selected_action_index: Optional[int]
     selected_action_description: Optional[str]
+    prompt: Optional[str] = None
+    raw_output: Optional[str] = None
 
 
 def _normalize_text(value: str) -> str:
@@ -885,7 +889,10 @@ def plan_subtasks(
         max_new_tokens=cfg.vlm_planner_max_new_tokens,
         use_wrist_image=cfg.vlm_planner_use_wrist_image,
     )
-    return parse_subtask_planning_output(raw_text)
+    result = parse_subtask_planning_output(raw_text)
+    result.prompt = prompt
+    result.raw_output = raw_text
+    return result
 
 
 def plan_actions(
@@ -935,7 +942,10 @@ def plan_actions(
         max_new_tokens=cfg.vlm_planner_max_new_tokens,
         use_wrist_image=cfg.vlm_planner_use_wrist_image,
     )
-    return parse_action_planning_output(raw_text)
+    result = parse_action_planning_output(raw_text)
+    result.prompt = prompt
+    result.raw_output = raw_text
+    return result
 
 
 __all__ = [
