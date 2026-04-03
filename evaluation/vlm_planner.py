@@ -644,6 +644,9 @@ def build_subtask_planning_prompt(
         "You are a robotic task planner. You will be given the current image together with this prompt.\n"
         "Your job in this stage is to propose candidate subtasks and select exactly one subtask.\n"
         "Use only the current image, the global instruction, the formal goal, the goal summary, and the current planning tree.\n"
+        "First, check which goal-summary items already appear completed in the current image.\n"
+        "Do not include already-completed goals/subtasks in candidate_subtasks.\n"
+        "Only propose unfinished subtasks, and prioritize the immediate next unfinished one.\n"
         "Return strict JSON only. Do not add any explanation, markdown, code fences, or extra fields.\n"
         "The JSON object must contain exactly these keys:\n"
         '- "candidate_subtasks": a non-empty list of short strings\n'
@@ -718,6 +721,8 @@ def build_action_planning_prompt(
         "You are a robotic task planner. You will be given the current image together with this prompt.\n"
         "Your job in this stage is to propose candidate atomic actions for the selected subtask and select exactly one action.\n"
         "Use only the current image, the global instruction, the formal goal, the goal summary, the current planning tree, and the selected subtask.\n"
+        "Before proposing actions, check whether the visible scene already satisfies completed effects.\n"
+        "Do not propose actions that repeat already-completed manipulations; focus on the next unfinished progress.\n"
         "Return strict JSON only. Do not add any explanation, markdown, code fences, or extra fields.\n"
         "The JSON object must contain exactly these keys:\n"
         '- "candidate_actions": a non-empty list of short strings\n'
