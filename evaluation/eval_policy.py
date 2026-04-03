@@ -156,11 +156,12 @@ def run_episode(
                 )
 
         step_idx = (t // cfg.switch_steps) % segment_count
+        force_replan_this_step = False
 
         if t % cfg.switch_steps == 0 and cfg.dynamic and distractor_info:
             seg_mid_moved = False
 
-        if (not cfg.use_vlm_planner) and t > 0 and step_idx != prev_step_idx:
+        if t > 0 and step_idx != prev_step_idx:
             comp_start_dict, replay_images_seg, seg_increment_accum, _, skip_increment, new_trigger = (
                 handle_segment_transition(
                     cfg,
@@ -184,6 +185,16 @@ def run_episode(
             episode_stats["skip_increment"] = skip_increment
             if new_trigger is not None:
                 resume_trigger_step = t
+            action_queue.clear()
+            planner_desc_cache = None
+            planner_steps_remaining = 0
+            force_replan_this_step = True
+            if cfg.use_vlm_planner:
+                log_message(
+                    f"[VLMPlanner] Segment transition at step {t} ({prev_step_idx} -> {step_idx}); "
+                    "cleared action queue and planner cache, force replan for current segment",
+                    log_file,
+                )
 
         prev_step_idx = step_idx
 
@@ -208,7 +219,7 @@ def run_episode(
         )
         if (
             planner_enabled
-            and planner_steps_remaining <= 0
+            and (force_replan_this_step or planner_steps_remaining <= 0)
         ):
             try:
                 from vlm_planner import plan_actions, plan_subtasks
@@ -262,15 +273,11 @@ def run_episode(
                     f"[VLMPlanner] Planned new desc at step {t}; execute next {planner_steps_remaining} steps with this desc",
                     log_file,
                 )
-            elif planner_desc_cache is not None:
+            else:
                 planner_steps_remaining = cfg.switch_steps
                 log_message(
-                    f"[WARN] Planner produced no usable desc at step {t}; fallback to previous planner desc for next {planner_steps_remaining} steps",
-                    log_file,
-                )
-            else:
-                log_message(
-                    f"[WARN] Planner produced no usable desc at step {t}; no previous planner desc available, using default desc fallback",
+                    f"[WARN] Planner produced no usable desc at step {t}; "
+                    f"fallback to current segment default desc for next {planner_steps_remaining} steps",
                     log_file,
                 )
 
