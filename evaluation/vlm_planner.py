@@ -1,4 +1,5 @@
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -6,6 +7,8 @@ import numpy as np
 from PIL import Image
 
 from config import GenerateConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -487,24 +490,75 @@ def _resolve_selection(
             f"{index_field_name}={selected_index} is out of range for {len(candidates)} candidates"
         )
 
+    candidate_at_selected_index: Optional[str] = None
+    if selected_index is not None:
+        candidate_at_selected_index = candidates[selected_index]
+
     if selected_description is not None:
         matched_indices = [idx for idx, candidate in enumerate(candidates) if candidate == selected_description]
-        if not matched_indices:
+        if matched_indices:
+            if selected_index is None:
+                selected_index = matched_indices[0]
+            elif selected_index not in matched_indices:
+                logger.warning(
+                    "[VLMPlanner] Selection conflict detected: %s=%s does not match %s=%r; "
+                    "matched_indices=%s candidate_at_selected_index=%r num_candidates=%d candidates_preview=%s. "
+                    "Applying description-priority repair.",
+                    index_field_name,
+                    selected_index,
+                    description_field_name,
+                    selected_description,
+                    matched_indices,
+                    candidate_at_selected_index,
+                    len(candidates),
+                    _summarize_candidates_for_log(candidates),
+                )
+                selected_index = matched_indices[0]
+        elif selected_index is not None:
+            logger.warning(
+                "[VLMPlanner] Selection conflict detected: %s=%s with %s=%r (description not in candidates); "
+                "candidate_at_selected_index=%r num_candidates=%d candidates_preview=%s. "
+                "Falling back to index-priority repair.",
+                index_field_name,
+                selected_index,
+                description_field_name,
+                selected_description,
+                candidate_at_selected_index,
+                len(candidates),
+                _summarize_candidates_for_log(candidates),
+            )
+            selected_description = candidate_at_selected_index
+        else:
             raise ValueError(
                 f"{description_field_name} does not match any candidate: {selected_description!r}"
-            )
-        matched_index = matched_indices[0]
-        if selected_index is None:
-            selected_index = matched_index
-        elif selected_index != matched_index:
-            raise ValueError(
-                f"{index_field_name}={selected_index} does not match {description_field_name}={selected_description!r}"
             )
 
     if selected_index is not None and selected_description is None:
         selected_description = candidates[selected_index]
 
     return selected_index, selected_description
+
+
+def _truncate_for_log(text: str, max_chars: int = 120) -> str:
+    """把日志文本截断到固定长度，避免单条日志过长。"""
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars]}..."
+
+
+def _summarize_candidates_for_log(candidates: List[str], max_items: int = 5, max_chars: int = 120) -> List[str]:
+    """输出候选列表摘要，避免日志打印过多内容。"""
+    summary = [_truncate_for_log(item, max_chars=max_chars) for item in candidates[:max_items]]
+    if len(candidates) > max_items:
+        summary.append(f"... ({len(candidates) - max_items} more)")
+    return summary
+
+
+def _preview_raw_text(raw_text: str, max_chars: int = 500) -> str:
+    """返回模型原始输出的截断预览，用于异常诊断。"""
+    if not isinstance(raw_text, str):
+        return repr(raw_text)
+    return _truncate_for_log(raw_text.replace("\n", "\\n"), max_chars=max_chars)
 
 
 def _extract_json_payload(raw_text: str) -> Dict[str, Any]:
@@ -657,7 +711,7 @@ def build_subtask_planning_prompt(
         "Return strict JSON only. Do not add any explanation, markdown, code fences, or extra fields.\n"
         "The JSON object must contain exactly these keys:\n"
         '- "candidate_subtasks": a non-empty list of short strings\n'
-        '- "selected_subtask_index": an integer index into candidate_subtasks, or null\n'
+        '- "selected_subtask_index": an integer (0-based) index into candidate_subtasks, or null\n'
         '- "selected_subtask_description": the selected string from candidate_subtasks, or null\n'
         "The selected description must match one item in candidate_subtasks.\n"
         "Keep the output minimal and task-relevant.\n\n"
@@ -746,7 +800,7 @@ def build_action_planning_prompt(
         "Return strict JSON only. Do not add any explanation, markdown, code fences, or extra fields.\n"
         "The JSON object must contain exactly these keys:\n"
         '- "candidate_actions": a non-empty list of short strings\n'
-        '- "selected_action_index": an integer index into candidate_actions, or null\n'
+        '- "selected_action_index": an integer (0-based) index into candidate_actions, or null\n'
         '- "selected_action_description": the selected string from candidate_actions, or null\n'
         "The selected description must match one item in candidate_actions.\n"
         "Keep the output minimal, concrete, and directly executable as a short VLA description.\n\n"
@@ -917,7 +971,12 @@ def plan_subtasks(
         max_new_tokens=cfg.vlm_planner_max_new_tokens,
         use_wrist_image=cfg.vlm_planner_use_wrist_image,
     )
-    return parse_subtask_planning_output(raw_text)
+    try:
+        return parse_subtask_planning_output(raw_text)
+    except Exception as exc:
+        raise ValueError(
+            f"Failed to parse subtask planning output: {exc}; raw_text_preview={_preview_raw_text(raw_text)!r}"
+        ) from exc
 
 
 def plan_actions(
@@ -969,7 +1028,12 @@ def plan_actions(
         max_new_tokens=cfg.vlm_planner_max_new_tokens,
         use_wrist_image=cfg.vlm_planner_use_wrist_image,
     )
-    return parse_action_planning_output(raw_text)
+    try:
+        return parse_action_planning_output(raw_text)
+    except Exception as exc:
+        raise ValueError(
+            f"Failed to parse action planning output: {exc}; raw_text_preview={_preview_raw_text(raw_text)!r}"
+        ) from exc
 
 
 __all__ = [
