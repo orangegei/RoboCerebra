@@ -594,6 +594,7 @@ def build_subtask_planning_prompt(
     language_instruction: str,
     formal_goal: str,
     task_tree: Dict[str, Any],
+    previous_selected_subtask_description: Optional[str] = None,
 ) -> str:
     """构建第一阶段子任务规划 prompt。
 
@@ -635,6 +636,19 @@ def build_subtask_planning_prompt(
     normalized_goal_summary = _extract_goal_summary_for_prompt(normalized_task_tree)
     task_tree_json = _serialize_task_tree_for_prompt(normalized_task_tree)
     goal_summary_text = "\n".join(f"- {item}" for item in normalized_goal_summary)
+    normalized_previous_subtask: Optional[str] = None
+    if previous_selected_subtask_description is not None:
+        normalized_previous_subtask = _require_non_empty_text(
+            previous_selected_subtask_description,
+            "previous_selected_subtask_description",
+        )
+    replanning_instruction = ""
+    if normalized_previous_subtask is not None:
+        replanning_instruction = (
+            "This is a re-planning round.\n"
+            "The selected_subtask_description in this round must be different from the previous one.\n"
+            f"previous_selected_subtask_description:\n{normalized_previous_subtask}\n\n"
+        )
 
     return (
         "You are a robotic task planner. You will be given the current image together with this prompt.\n"
@@ -647,6 +661,7 @@ def build_subtask_planning_prompt(
         '- "selected_subtask_description": the selected string from candidate_subtasks, or null\n'
         "The selected description must match one item in candidate_subtasks.\n"
         "Keep the output minimal and task-relevant.\n\n"
+        f"{replanning_instruction}"
         f"language_instruction:\n{normalized_instruction}\n\n"
         f"formal_goal:\n{normalized_goal}\n\n"
         f"goal_summary:\n{goal_summary_text}\n\n"
@@ -662,6 +677,7 @@ def build_action_planning_prompt(
     formal_goal: str,
     task_tree: Dict[str, Any],
     selected_subtask_description: str,
+    previous_selected_action_description: Optional[str] = None,
 ) -> str:
     """构建第二阶段动作规划 prompt。
 
@@ -707,8 +723,21 @@ def build_action_planning_prompt(
         selected_subtask_description,
         "selected_subtask_description",
     )
+    normalized_previous_action: Optional[str] = None
+    if previous_selected_action_description is not None:
+        normalized_previous_action = _require_non_empty_text(
+            previous_selected_action_description,
+            "previous_selected_action_description",
+        )
     task_tree_json = _serialize_task_tree_for_prompt(normalized_task_tree)
     goal_summary_text = "\n".join(f"- {item}" for item in normalized_goal_summary)
+    replanning_instruction = ""
+    if normalized_previous_action is not None:
+        replanning_instruction = (
+            "This is a re-planning round.\n"
+            "The selected_action_description in this round must be different from the previous one.\n"
+            f"previous_selected_action_description:\n{normalized_previous_action}\n\n"
+        )
 
     return (
         "You are a robotic task planner. You will be given the current image together with this prompt.\n"
@@ -721,6 +750,7 @@ def build_action_planning_prompt(
         '- "selected_action_description": the selected string from candidate_actions, or null\n'
         "The selected description must match one item in candidate_actions.\n"
         "Keep the output minimal, concrete, and directly executable as a short VLA description.\n\n"
+        f"{replanning_instruction}"
         f"language_instruction:\n{normalized_instruction}\n\n"
         f"formal_goal:\n{normalized_goal}\n\n"
         f"goal_summary:\n{goal_summary_text}\n\n"
@@ -839,6 +869,7 @@ def plan_subtasks(
     runtime: VLMRuntime,
     observation: dict,
     task_tree: Dict[str, Any],
+    previous_selected_subtask_description: Optional[str] = None,
 ) -> SubtaskPlanningResult:
     """执行第一阶段子任务规划。
 
@@ -876,6 +907,7 @@ def plan_subtasks(
         language_instruction=language_instruction,
         formal_goal=formal_goal,
         task_tree=task_tree,
+        previous_selected_subtask_description=previous_selected_subtask_description,
     )
     prompt = _merge_prompt_override(default_prompt, cfg.vlm_subtask_prompt, "cfg.vlm_subtask_prompt")
     raw_text = generate_text_from_observation(
@@ -894,6 +926,7 @@ def plan_actions(
     observation: dict,
     task_tree: Dict[str, Any],
     selected_subtask_description: str,
+    previous_selected_action_description: Optional[str] = None,
 ) -> ActionPlanningResult:
     """执行第二阶段动作规划。
 
@@ -926,6 +959,7 @@ def plan_actions(
         formal_goal=formal_goal,
         task_tree=task_tree,
         selected_subtask_description=selected_subtask_description,
+        previous_selected_action_description=previous_selected_action_description,
     )
     prompt = _merge_prompt_override(default_prompt, cfg.vlm_action_prompt, "cfg.vlm_action_prompt")
     raw_text = generate_text_from_observation(

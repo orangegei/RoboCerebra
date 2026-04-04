@@ -128,6 +128,8 @@ def run_episode(
     replay_images_all: List[np.ndarray] = []
     replay_images_seg: List[np.ndarray] = []
     planner_desc_cache: Optional[str] = None
+    last_selected_subtask_description: Optional[str] = None
+    last_selected_action_description: Optional[str] = None
     planner_steps_remaining = 0
     t = 0
     max_steps = cfg.switch_steps * segment_count
@@ -206,18 +208,23 @@ def run_episode(
             and planner_runtime is not None
             and current_task_tree is not None
         )
-        if (
-            planner_enabled
-            and planner_steps_remaining <= 0
-        ):
+        if planner_enabled and planner_steps_remaining <= 0:
+            planner_selected_subtask_description = None
+            selected_action_description = None
+            candidate_actions = None
             try:
                 from vlm_planner import plan_actions, plan_subtasks
 
-                subtask_result = plan_subtasks(cfg, planner_runtime, observation, current_task_tree)
+                subtask_result = plan_subtasks(
+                    cfg,
+                    planner_runtime,
+                    observation,
+                    current_task_tree,
+                    previous_selected_subtask_description=last_selected_subtask_description,
+                )
                 if subtask_result.selected_subtask_description is not None:
-                    planner_selected_desc = subtask_result.selected_subtask_description
-                    selected_action_description = None
-                    candidate_actions = None
+                    planner_selected_subtask_description = subtask_result.selected_subtask_description
+                    planner_selected_desc = planner_selected_subtask_description
                     try:
                         action_result = plan_actions(
                             cfg,
@@ -225,6 +232,7 @@ def run_episode(
                             observation,
                             current_task_tree,
                             subtask_result.selected_subtask_description,
+                            previous_selected_action_description=last_selected_action_description,
                         )
                         selected_action_description = action_result.selected_action_description
                         candidate_actions = action_result.candidate_actions
@@ -256,6 +264,10 @@ def run_episode(
 
             if planner_selected_desc is not None:
                 planner_desc_cache = planner_selected_desc
+                if planner_selected_subtask_description is not None:
+                    last_selected_subtask_description = planner_selected_subtask_description
+                if selected_action_description is not None:
+                    last_selected_action_description = selected_action_description
                 planner_steps_remaining = cfg.switch_steps
                 action_queue.clear()
                 log_message(
@@ -332,6 +344,13 @@ def run_episode(
             env, goal, total_completed_prev, episode_stats, step_idx, log_file
         )
         seg_increment_accum += seg_diff
+        if planner_enabled and seg_diff != 0:
+            planner_steps_remaining = 0
+            action_queue.clear()
+            log_message(
+                f"[VLMPlanner] Completed {seg_diff} subtask(s) at step {t - 1}; trigger immediate re-planning",
+                log_file,
+            )
 
         if episode_stats["skip_increment"]:
             episode_stats["skip_increment"] = False
